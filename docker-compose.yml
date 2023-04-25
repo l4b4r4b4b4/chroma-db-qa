@@ -1,0 +1,98 @@
+version: '3'
+
+volumes:
+  chroma-test-mongodb-data:
+  chroma-test-mongodb-config:
+  index_data:
+  clickhouse_data:
+  backups:
+
+networks:
+  dev-chroma-test-net:
+    driver: bridge
+  web:
+    external: true
+
+
+services:
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.dev
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - MONGO_USER=${MONGO_USER}
+      - MONGO_PASS=${MONGO_PASS}
+      - MONGO_INITDB_ROOT_USERNAME=${MONGO_ROOT_USER}
+      - MONGO_INITDB_ROOT_PASSWORD=${MONGO_ROOT_PASS}
+    volumes:
+      - './frontend/:/usr/src/app/'
+    logging:
+      options:
+        max-size: "1m"
+        max-file: "1"
+    restart: always
+    networks:
+      - dev-chroma-test-net
+      - web
+  chromadb:
+    build:
+      context: ./chroma
+      dockerfile: Dockerfile
+    volumes:
+      - ./chroma:/chroma
+      - index_data:/index_data
+    command: uvicorn chromadb.app:app --reload --workers 1 --host 0.0.0.0 --port 8000 --log-config log_config.yml
+    environment:
+      - CHROMA_DB_IMPL=clickhouse
+      - CLICKHOUSE_HOST=clickhouse
+      - CLICKHOUSE_PORT=8123
+    ports:
+      - 8000:8000
+    depends_on:
+      - clickhouse
+    networks:
+      - dev-chroma-test-net
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:22.9-alpine
+    environment:
+      - ALLOW_EMPTY_PASSWORD=yes
+      - CLICKHOUSE_TCP_PORT=9000
+      - CLICKHOUSE_HTTP_PORT=8123
+    # ports:
+    #   - '8123:8123'
+    #   - '9000:9000'
+    volumes:
+      - clickhouse_data:/bitnami/clickhouse
+      - backups:/backups
+      - ./chroma/config/backup_disk.xml:/etc/clickhouse-server/config.d/backup_disk.xml
+      - ./chroma/config/chroma_users.xml:/etc/clickhouse-server/users.d/chroma.xml
+    networks:
+      - dev-chroma-test-net
+
+  mongodb:
+    # container_name: mongodb
+    image: mongo:latest
+    volumes:
+      - chroma-test-mongodb-data:/data/db
+      - chroma-test-mongodb-config:/data/configdb
+      - ./backend/mongodb/init-mongo.sh:/docker-entrypoint-initdb.d/init-mongo.sh
+      # - ./backend/mongodb/init-assistant-data.js:/init-assistant-data.js
+      # - ./backend/mongodb/init-data-test.js:/init-data-test.js
+    command: [ --auth ]
+    # ports:
+    #   - 27017:27017
+    logging:
+      options:
+        max-size: "1m"
+        max-file: "1"
+    environment:
+      - MONGO_INITDB_ROOT_USERNAME=${MONGO_ROOT_USER}
+      - MONGO_INITDB_ROOT_PASSWORD=${MONGO_ROOT_PASS}
+      - DB_NAMES=${DB_NAMES}
+      - MONGO_USER=${MONGO_USER}
+      - MONGO_PASS=${MONGO_PASS}
+    restart: always
+    networks:
+      - dev-chroma-test-net
